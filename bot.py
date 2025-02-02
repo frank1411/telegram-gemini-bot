@@ -3,10 +3,10 @@ import logging
 from dotenv import load_dotenv
 import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes, ConversationHandler
 
 # Cargar variables de entorno ANTES de usarlas
-load_dotenv()
+load_dotenv(override=True)
 
 # Configurar logging
 logging.basicConfig(
@@ -18,8 +18,8 @@ logging.basicConfig(
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 TELEGRAM_USER_ID = os.getenv('TELEGRAM_USER_ID')
-# Convertir la cadena de IDs en una lista
-TELEGRAM_DESTINATIONS = os.getenv('TELEGRAM_GROUPS_AND_CHANNELS', '').split(',')
+# Convertir la cadena de IDs en una lista, eliminando elementos vacíos
+TELEGRAM_DESTINATIONS = [dest.strip() for dest in os.getenv('TELEGRAM_GROUPS_AND_CHANNELS', '').split(',') if dest.strip()]
 
 # Verificar que el token esté presente
 if not TELEGRAM_BOT_TOKEN:
@@ -34,10 +34,59 @@ genai.configure(api_key=GEMINI_API_KEY)
 # Modelo de Gemini
 model = genai.GenerativeModel('gemini-pro')
 
+# Estados para la conversación de generación de artículos
+GENERATE, APPROVE, EDIT = range(3)
+
 # Función para generar un artículo con Gemini
-def generar_articulo():
+def generar_articulo(tema_especifico=None):
     try:
-        prompt = "Genera un artículo corto y original sobre un tema actual relevante para un público general. Debe tener una introducción, un desarrollo y una conclusión. El tono debe ser neutral y objetivo. Extensión aproximada de 200-300 palabras."
+        # Si no se proporciona un tema específico, usar el prompt original
+        if not tema_especifico:
+            prompt = """Eres un analista experto en apuestas deportivas, especializado en baloncesto de la NBA. 
+            Dominas conceptos avanzados como bankroll, stake, ROI, handicap, over/under, gestión de riesgo, yield y rollover.
+
+            Instrucciones del artículo:
+            Extensión: 250-300 palabras.
+            Tema: Estrategias avanzadas de apuestas en la NBA.
+            Nivel: Profesional y técnico.
+            Tono: Objetivo, basado en datos y análisis riguroso.
+            Audiencia: Apostadores avanzados y analistas deportivos.
+            Posibles enfoques:
+            1. Gestión avanzada del bankroll en apuestas NBA.
+            2. Estrategias de stake y ROI en baloncesto.
+            3. Análisis de handicaps y over/under en la NBA.
+            4. Técnicas de mitigación de riesgo en apuestas deportivas.
+            5. Optimización del yield mediante modelos estadísticos.
+
+            Requisitos del contenido:
+            ✅ Uso de terminología técnica precisa.
+            ✅ Incluir ejemplos prácticos y casos reales.
+            ✅ Explicaciones claras y estructuradas de conceptos complejos.
+            ✅ Insights basados en datos recientes y análisis estadístico.
+
+            El artículo debe reflejar un conocimiento profundo del mercado de apuestas en la NBA, 
+            proporcionando estrategias accionables respaldadas por evidencia."""
+        else:
+            # Si se proporciona un tema específico, usarlo en el prompt
+            prompt = f"""Eres un analista experto en apuestas deportivas, especializado en baloncesto de la NBA. 
+            Dominas conceptos avanzados como bankroll, stake, ROI, handicap, over/under, gestión de riesgo, yield y rollover.
+
+            Instrucciones del artículo:
+            Extensión: 250-300 palabras.
+            Tema específico: {tema_especifico}
+            Nivel: Profesional y técnico.
+            Tono: Objetivo, basado en datos y análisis riguroso.
+            Audiencia: Apostadores avanzados y analistas deportivos.
+
+            Requisitos del contenido:
+            ✅ Uso de terminología técnica precisa.
+            ✅ Incluir ejemplos prácticos y casos reales relacionados con {tema_especifico}.
+            ✅ Explicaciones claras y estructuradas de conceptos complejos.
+            ✅ Insights basados en datos recientes y análisis estadístico.
+
+            El artículo debe reflejar un conocimiento profundo del mercado de apuestas en la NBA, 
+            proporcionando estrategias accionables respaldadas por evidencia."""
+
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -47,21 +96,36 @@ def generar_articulo():
 # Función para publicar artículo en múltiples destinos
 async def publicar_articulo(context: ContextTypes.DEFAULT_TYPE, articulo: str) -> None:
     """Publicar artículo en múltiples destinos"""
+    # Imprimir los destinos para depuración
+    logging.info(f"Destinos configurados: {TELEGRAM_DESTINATIONS}")
+    
     if not TELEGRAM_DESTINATIONS:
         logging.warning("No se han configurado destinos para publicar.")
         return
     
     for destination in TELEGRAM_DESTINATIONS:
         try:
+            # Usar el ID tal como está, sin modificaciones
+            logging.info(f"Intentando enviar a chat_id: {destination}")
+            logging.info(f"Longitud del artículo: {len(articulo)} caracteres")
+            
+            # Intentar enviar el mensaje
             await context.bot.send_message(
-                chat_id=destination.strip(), 
+                chat_id=destination, 
                 text=articulo
             )
-            logging.info(f"Artículo publicado en {destination}")
+            logging.info(f"✅ Artículo publicado exitosamente en {destination}")
+        
         except Exception as e:
-            logging.error(f"Error publicando en {destination}: {e}")
+            # Logging detallado del error
+            logging.error(f"❌ Error publicando en {destination}: {str(e)}")
+            logging.error(f"Detalles del error: {type(e).__name__}")
+            
+            # Información adicional de depuración
+            if hasattr(e, 'response'):
+                logging.error(f"Respuesta del bot: {e.response}")
 
-# Comandos de inicio y ayuda
+# Comando de inicio
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Comando de inicio del bot"""
     welcome_message = (
@@ -69,8 +133,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Comandos disponibles:\n"
         "/start - Iniciar el bot\n"
         "/help - Mostrar ayuda\n"
-        "/translate - Traducir texto\n"
-        "/code - Generar código\n"
         "/generar - Generar y enviar un artículo\n"
     )
     await update.message.reply_text(welcome_message)
@@ -80,103 +142,163 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text = (
         "🤖 Ayuda del Bot de Gemini AI 🤖\n\n"
         "Puedes interactuar conmigo de varias formas:\n"
-        "1. Envía un mensaje de texto y conversaré contigo\n"
-        "2. Usa los siguientes comandos especiales:\n"
-        "   /start - Iniciar el bot\n"
-        "   /help - Mostrar esta ayuda\n"
-        "   /translate [idioma_origen] [idioma_destino] [texto] - Traducir texto\n"
-        "   /code [lenguaje] [descripción] - Generar código\n"
-        "   /generar - Generar un artículo para aprobar\n"
+        "1. Usa el comando /generar para crear un artículo\n"
+        "2. Podrás aprobar, editar o rechazar el artículo generado\n"
     )
     await update.message.reply_text(help_text)
 
-# Comando para generar artículo
-async def generar_y_enviar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generar y enviar artículo para aprobación"""
-    articulo = generar_articulo()
-    if articulo:
+# Función para iniciar la generación de artículos
+async def generar_y_enviar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Iniciar el proceso de generación de artículos"""
+    try:
+        # Mensaje inicial
+        await update.message.reply_text(
+            "🤖 Generador de Artículos de Apuestas NBA 🏀\n\n"
+            "Puedes proporcionarme un tema específico o dejar que genere un artículo aleatorio.\n"
+            "Escribe un tema o envía /cancelar para salir."
+        )
+        return GENERATE
+    except Exception as e:
+        logging.error(f"Error al iniciar generación de artículo: {e}")
+        await update.message.reply_text("Hubo un problema iniciando la generación del artículo.")
+        return ConversationHandler.END
+
+# Manejar el tema proporcionado por el usuario
+async def handle_tema(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Generar artículo basado en el tema proporcionado"""
+    try:
+        # Obtener el tema del mensaje
+        tema = update.message.text.strip()
+        
+        # Cancelar si el usuario no quiere continuar
+        if tema.lower() == '/cancelar':
+            await update.message.reply_text("Generación de artículo cancelada.")
+            return ConversationHandler.END
+        
+        # Generar el artículo
+        articulo = generar_articulo(tema if tema != '/generar' else None)
+        
+        if not articulo:
+            await update.message.reply_text("No se pudo generar el artículo. Por favor, intenta de nuevo.")
+            return ConversationHandler.END
+        
+        # Almacenar el artículo en el contexto de la conversación
+        context.user_data['articulo'] = articulo
+        
         # Crear botones de aprobación
         keyboard = [
             [
-                InlineKeyboardButton("Aprobar", callback_data='approve'),
-                InlineKeyboardButton("Rechazar", callback_data='reject')
+                InlineKeyboardButton("✅ Aprobar", callback_data='aprobar'),
+                InlineKeyboardButton("✏️ Editar", callback_data='editar'),
+                InlineKeyboardButton("❌ Rechazar", callback_data='rechazar')
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Enviar para aprobación
-        await context.bot.send_message(
-            chat_id=TELEGRAM_USER_ID, 
-            text=f"¿Aprobar este artículo?\n\n{articulo}", 
+        # Mostrar el artículo generado con botones de acción
+        await update.message.reply_text(
+            f"🤖 Artículo Generado:\n\n{articulo}\n\n"
+            "Por favor, elige una acción:",
             reply_markup=reply_markup
         )
-    else:
-        await update.message.reply_text("Error al generar el artículo.")
-
-# Manejar botones de aprobación
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manejar interacción con botones de aprobación"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == 'approve':
-        # Extraer artículo del mensaje original
-        articulo = query.message.text.replace("¿Aprobar este artículo?\n\n", "")
         
-        # Publicar en todos los destinos configurados
-        await publicar_articulo(context, articulo)
+        return APPROVE
+    
+    except Exception as e:
+        logging.error(f"Error al manejar tema del artículo: {e}")
+        await update.message.reply_text("Hubo un problema procesando tu solicitud.")
+        return ConversationHandler.END
+
+# Manejar las acciones de los botones
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Manejar las acciones de aprobación, edición o rechazo"""
+    try:
+        query = update.callback_query
+        await query.answer()
         
-        await query.edit_message_text(text="Artículo aprobado y publicado.")
+        # Recuperar el artículo generado
+        articulo = context.user_data.get('articulo')
+        
+        if not articulo:
+            await query.edit_message_text("El artículo no está disponible. Por favor, genera uno nuevo.")
+            return ConversationHandler.END
+        
+        if query.data == 'aprobar':
+            # Publicar el artículo
+            await publicar_articulo(context, articulo)
+            await query.edit_message_text("✅ Artículo aprobado y publicado exitosamente.")
+            return ConversationHandler.END
+        
+        elif query.data == 'editar':
+            # Solicitar edición al usuario
+            await query.edit_message_text(
+                "✏️ Edita el artículo. Envía tu versión modificada:"
+            )
+            return EDIT
+        
+        elif query.data == 'rechazar':
+            await query.edit_message_text("❌ Artículo rechazado. Puedes generar uno nuevo.")
+            return ConversationHandler.END
     
-    elif query.data == 'reject':
-        await query.edit_message_text(text="Artículo rechazado.")
-
-# Comando de traducción
-async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Traducir texto entre idiomas"""
-    if len(context.args) < 3:
-        await update.message.reply_text("Uso: /translate [idioma_origen] [idioma_destino] [texto]")
-        return
-    
-    src_lang, dest_lang = context.args[0], context.args[1]
-    text = " ".join(context.args[2:])
-    
-    try:
-        prompt = f"Traduce el siguiente texto del {src_lang} al {dest_lang}: {text}"
-        response = model.generate_content(prompt)
-        await update.message.reply_text(f"Traducción: {response.text}")
     except Exception as e:
-        await update.message.reply_text(f"Error en la traducción: {str(e)}")
+        logging.error(f"Error al procesar botón: {e}")
+        await query.edit_message_text("Hubo un problema procesando tu selección.")
+        return ConversationHandler.END
 
-# Comando para generar código
-async def code_generator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generar código basado en descripción"""
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /code [lenguaje] [descripción]")
-        return
-    
-    language = context.args[0]
-    description = " ".join(context.args[1:])
-    
+# Manejar la edición del artículo
+async def editar_articulo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Manejar la edición del artículo por parte del usuario"""
     try:
-        prompt = f"Genera código en {language} para: {description}"
-        response = model.generate_content(prompt)
-        await update.message.reply_text(f"Código generado:\n```{language}\n{response.text}\n```")
+        # Obtener el artículo editado
+        articulo_editado = update.message.text.strip()
+        
+        # Crear botones de aprobación para el artículo editado
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Aprobar", callback_data='aprobar'),
+                InlineKeyboardButton("❌ Rechazar", callback_data='rechazar')
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Mostrar el artículo editado con botones de acción
+        await update.message.reply_text(
+            f"🤖 Artículo Editado:\n\n{articulo_editado}\n\n"
+            "Por favor, elige una acción:",
+            reply_markup=reply_markup
+        )
+        
+        # Almacenar el artículo editado
+        context.user_data['articulo'] = articulo_editado
+        
+        return APPROVE
+    
     except Exception as e:
-        await update.message.reply_text(f"Error generando código: {str(e)}")
+        logging.error(f"Error al editar artículo: {e}")
+        await update.message.reply_text("Hubo un problema editando el artículo.")
+        return ConversationHandler.END
 
-# Manejar mensajes de texto generales
+# Cancelar el proceso de generación
+async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancelar el proceso de generación de artículos"""
+    await update.message.reply_text("Proceso de generación de artículos cancelado.")
+    return ConversationHandler.END
+
+# Manejar mensajes generales
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manejar mensajes de texto"""
-    user_message = update.message.text
-    
+    """Manejar mensajes que no son comandos"""
     try:
-        # Generar respuesta con Gemini
-        response = model.generate_content(user_message)
-        await update.message.reply_text(response.text)
+        # Mensaje de ayuda para usuarios que no usan comandos específicos
+        await update.message.reply_text(
+            "🤖 Usa los siguientes comandos:\n"
+            "/start - Iniciar el bot\n"
+            "/help - Mostrar ayuda\n"
+            "/generar - Crear un nuevo artículo"
+        )
     except Exception as e:
         logging.error(f"Error al procesar mensaje: {e}")
         await update.message.reply_text("Lo siento, hubo un error procesando tu mensaje.")
+
 
 # Función principal para iniciar el bot
 def main() -> None:
@@ -184,15 +306,21 @@ def main() -> None:
     # Crear la aplicación
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Registrar manejadores de comandos
+    # Configurar el manejador de conversación para generación de artículos
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("generar", generar_y_enviar)],
+        states={
+            GENERATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tema)],
+            APPROVE: [CallbackQueryHandler(button)],
+            EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_articulo)],
+        },
+        fallbacks=[CommandHandler('cancelar', cancelar)]
+    )
+    
+    # Registrar manejadores
+    application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("translate", translate_command))
-    application.add_handler(CommandHandler("code", code_generator))
-    application.add_handler(CommandHandler("generar", generar_y_enviar))
-    
-    # Registrar manejador de botones
-    application.add_handler(CallbackQueryHandler(button))
     
     # Registrar manejador de mensajes generales
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
