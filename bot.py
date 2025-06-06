@@ -32,7 +32,10 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Modelo de Gemini
-model = genai.GenerativeModel('gemini-pro')
+#model = genai.GenerativeModel('gemini-pro')
+#model = genai.GenerativeModel('gemini-1.0-pro')
+#model = genai.GenerativeModel('gemini-1.5-pro-latest')
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 # Estados para la conversación de generación de artículos
 GENERATE, APPROVE, EDIT = range(3)
