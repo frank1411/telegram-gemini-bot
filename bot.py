@@ -1,9 +1,12 @@
 import os
 import logging
+import asyncio
 from dotenv import load_dotenv
 import google.generativeai as genai
+from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes, ConversationHandler
+import uvicorn
 
 # Cargar variables de entorno ANTES de usarlas
 load_dotenv(override=True)
@@ -302,34 +305,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logging.error(f"Error al procesar mensaje: {e}")
         await update.message.reply_text("Lo siento, hubo un error procesando tu mensaje.")
 
+# Configuración de la aplicación FastAPI
+app = FastAPI()
 
-# Función principal para iniciar el bot
-def main() -> None:
-    """Función principal para iniciar el bot"""
-    # Crear la aplicación
+# Variable para almacenar la aplicación de Telegram
+application = None
+
+# Endpoint de health check para Render
+@app.get("/")
+async def health_check():
+    return {"status": "ok"}
+
+# Endpoint para recibir actualizaciones de webhook
+@app.post("/webhook")
+async def webhook(request: Request):
+    if application is None:
+        return {"status": "error", "message": "Application not initialized"}
+    
+    json_data = await request.json()
+    update = Update.de_json(json_data, application.bot)
+    await application.process_update(update)
+    return {"status": "ok"}
+
+# Función para configurar la aplicación de Telegram
+async def setup_application():
+    """Configurar la aplicación de Telegram."""
+    global application
+    
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Configurar el manejador de conversación para generación de artículos
+    # Configurar el manejador de conversación
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("generar", generar_y_enviar)],
+        entry_points=[CommandHandler('generar', generar_y_enviar)],
         states={
             GENERATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tema)],
-            APPROVE: [CallbackQueryHandler(button)],
             EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_articulo)],
         },
-        fallbacks=[CommandHandler('cancelar', cancelar)]
+        fallbacks=[CommandHandler('cancelar', cancelar)],
     )
-    
-    # Registrar manejadores
-    application.add_handler(conv_handler)
+
+    # Agregar manejadores
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    
-    # Registrar manejador de mensajes generales
+    application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(button))
     
-    # Iniciar el bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    return application
+
+# Configurar el webhook en Telegram
+async def set_webhook():
+    webhook_url = os.getenv('WEBHOOK_URL')
+    if not webhook_url:
+        raise ValueError("La variable de entorno WEBHOOK_URL no está configurada")
+    
+    webhook_url = f"{webhook_url}/webhook"
+    await application.bot.set_webhook(url=webhook_url)
+    logging.info(f"Webhook configurado en: {webhook_url}")
+
+# Función principal para iniciar la aplicación
+def main():
+    # Configurar logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Configurar la aplicación de Telegram
+    loop = asyncio.get_event_loop()
+    app_telegram = loop.run_until_complete(setup_application())
+    
+    # Configurar el webhook
+    loop.run_until_complete(set_webhook())
+    
+    # Obtener el puerto de la variable de entorno o usar 8000 por defecto
+    port = int(os.getenv('PORT', 8000))
+    
+    # Iniciar el servidor FastAPI
+    uvicorn.run(
+        "bot:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info"
+    )
 
 if __name__ == '__main__':
     main()
