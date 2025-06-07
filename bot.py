@@ -305,11 +305,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logging.error(f"Error al procesar mensaje: {e}")
         await update.message.reply_text("Lo siento, hubo un error procesando tu mensaje.")
 
+# Variable para almacenar la aplicación de Telegram
+application = None
+
 # Configuración de la aplicación FastAPI
 app = FastAPI()
 
-# Variable para almacenar la aplicación de Telegram
-application = None
+# Configurar la aplicación al iniciar
+@app.on_event("startup")
+async def startup_event():
+    global application
+    if application is None:
+        application = await setup_application()
+        await set_webhook()
 
 # Endpoint de health check para Render
 @app.get("/")
@@ -330,9 +338,7 @@ async def webhook(request: Request):
 # Función para configurar la aplicación de Telegram
 async def setup_application():
     """Configurar la aplicación de Telegram."""
-    global application
-    
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Configurar el manejador de conversación
     conv_handler = ConversationHandler(
@@ -345,13 +351,13 @@ async def setup_application():
     )
 
     # Agregar manejadores
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(conv_handler)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button))
     
-    return application
+    return app
 
 # Configurar el webhook en Telegram
 async def set_webhook():
