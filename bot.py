@@ -342,22 +342,26 @@ async def health_check():
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
-        # Solo procesar si la aplicación está configurada
-        if application is None:
-            logging.error("La aplicación no está inicializada")
-            return {"status": "error", "message": "Application not initialized"}
+        # Obtener los datos JSON de la solicitud
+        update_data = await request.json()
+        logging.info(f"Datos recibidos: {update_data}")
         
-        # Obtener los datos de la petición
-        json_data = await request.json()
-        logging.info(f"Datos recibidos: {json_data}")
+        # Crear el objeto Update
+        update = Update.de_json(update_data, application.bot)
         
-        # Procesar la actualización
-        update = Update.de_json(json_data, application.bot)
+        # Procesar la actualización directamente
+        if update.message:
+            await update.message.reply_text("¡Hola! Estoy procesando tu mensaje...")
+            
+            # Reenviar al manejador de mensajes
+            if update.message.text and update.message.text.startswith('/'):
+                await application.process_update(update)
+            else:
+                # Si no es un comando, usar el manejador de mensajes
+                await handle_message(update, None)
         
-        # Procesar la actualización
-        async with application:
-            await application.initialize()
-            await application.start()
+        # Procesar otros tipos de actualizaciones
+        elif update.callback_query:
             await application.process_update(update)
         
         return {"status": "ok"}
