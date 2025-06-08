@@ -308,11 +308,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # Configuración de la aplicación FastAPI
 app = FastAPI()
 
-# Inicializar la aplicación de Telegram
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# Variable para almacenar la aplicación de Telegram
+application = None
 
-# Configurar manejadores
-def setup_handlers():
+# Función para configurar la aplicación de Telegram
+async def setup_application():
+    """Configurar la aplicación de Telegram."""
+    global application
+    
+    # Crear la aplicación
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
     # Configurar el manejador de conversación
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('generar', generar_y_enviar)],
@@ -329,9 +335,12 @@ def setup_handlers():
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(button))
-
-# Configurar manejadores al iniciar
-setup_handlers()
+    
+    # Inicializar la aplicación
+    await application.initialize()
+    await application.start()
+    
+    return application
 
 # Endpoint de health check para Render
 @app.get("/")
@@ -349,20 +358,8 @@ async def webhook(request: Request):
         # Crear el objeto Update
         update = Update.de_json(update_data, application.bot)
         
-        # Procesar la actualización directamente
-        if update.message:
-            await update.message.reply_text("¡Hola! Estoy procesando tu mensaje...")
-            
-            # Reenviar al manejador de mensajes
-            if update.message.text and update.message.text.startswith('/'):
-                await application.process_update(update)
-            else:
-                # Si no es un comando, usar el manejador de mensajes
-                await handle_message(update, None)
-        
-        # Procesar otros tipos de actualizaciones
-        elif update.callback_query:
-            await application.process_update(update)
+        # Procesar la actualización
+        await application.process_update(update)
         
         return {"status": "ok"}
         
@@ -386,8 +383,15 @@ async def set_webhook():
 async def startup_event():
     try:
         logging.info("Iniciando aplicación FastAPI...")
+        
+        # Configurar la aplicación de Telegram
+        await setup_application()
+        logging.info("Aplicación de Telegram configurada")
+        
+        # Configurar el webhook
         await set_webhook()
         logging.info("Aplicación lista para recibir peticiones")
+        
     except Exception as e:
         logging.error(f"Error al iniciar la aplicación: {e}", exc_info=True)
         raise
