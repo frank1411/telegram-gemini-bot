@@ -305,62 +305,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logging.error(f"Error al procesar mensaje: {e}")
         await update.message.reply_text("Lo siento, hubo un error procesando tu mensaje.")
 
-# Variable para almacenar la aplicación de Telegram
-application = None
-
 # Configuración de la aplicación FastAPI
 app = FastAPI()
 
-# Configurar la aplicación al iniciar
-@app.on_event("startup")
-async def startup_event():
-    global application
-    logging.info("Iniciando aplicación FastAPI...")
-    try:
-        if application is None:
-            logging.info("Configurando aplicación de Telegram...")
-            application = await setup_application()
-            logging.info("Aplicación de Telegram configurada")
-            await set_webhook()
-            logging.info("Webhook configurado exitosamente")
-    except Exception as e:
-        logging.error(f"Error en startup_event: {str(e)}", exc_info=True)
-        raise
+# Inicializar la aplicación de Telegram
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# Endpoint de health check para Render
-@app.get("/")
-async def health_check():
-    return {"status": "ok"}
-
-# Endpoint para recibir actualizaciones de webhook
-@app.post("/webhook")
-async def webhook(request: Request):
-    try:
-        logging.info("Recibida petición en webhook")
-        if application is None:
-            logging.error("La aplicación no está inicializada")
-            return {"status": "error", "message": "Application not initialized"}
-        
-        json_data = await request.json()
-        logging.info(f"Datos recibidos: {json_data}")
-        
-        update = Update.de_json(json_data, application.bot)
-        logging.info(f"Update procesado: {update}")
-        
-        await application.initialize()
-        await application.start()
-        await application.process_update(update)
-        
-        return {"status": "ok"}
-    except Exception as e:
-        logging.error(f"Error en webhook: {str(e)}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-# Función para configurar la aplicación de Telegram
-async def setup_application():
-    """Configurar la aplicación de Telegram."""
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+# Configurar manejadores
+def setup_handlers():
     # Configurar el manejador de conversación
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('generar', generar_y_enviar)],
@@ -372,15 +324,49 @@ async def setup_application():
     )
 
     # Agregar manejadores
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button))
-    
-    return app
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(conv_handler)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(button))
 
-# Configurar el webhook en Telegram
+# Configurar manejadores al iniciar
+setup_handlers()
+
+# Endpoint de health check para Render
+@app.get("/")
+async def health_check():
+    return {"status": "ok"}
+
+# Endpoint para recibir actualizaciones de webhook
+@app.post("/webhook")
+async def webhook(request: Request):
+    try:
+        # Solo procesar si la aplicación está configurada
+        if application is None:
+            logging.error("La aplicación no está inicializada")
+            return {"status": "error", "message": "Application not initialized"}
+        
+        # Obtener los datos de la petición
+        json_data = await request.json()
+        logging.info(f"Datos recibidos: {json_data}")
+        
+        # Procesar la actualización
+        update = Update.de_json(json_data, application.bot)
+        
+        # Procesar la actualización
+        async with application:
+            await application.initialize()
+            await application.start()
+            await application.process_update(update)
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logging.error(f"Error en webhook: {str(e)}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# Configurar el webhook
 async def set_webhook():
     webhook_url = os.getenv('WEBHOOK_URL')
     if not webhook_url:
@@ -389,6 +375,18 @@ async def set_webhook():
     webhook_url = f"{webhook_url}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     logging.info(f"Webhook configurado en: {webhook_url}")
+    return True
+
+# Configuración del webhook
+@app.on_event("startup")
+async def startup_event():
+    try:
+        logging.info("Iniciando aplicación FastAPI...")
+        await set_webhook()
+        logging.info("Aplicación lista para recibir peticiones")
+    except Exception as e:
+        logging.error(f"Error al iniciar la aplicación: {e}", exc_info=True)
+        raise
 
 # Función principal para iniciar la aplicación
 def main():
@@ -397,13 +395,6 @@ def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    # Configurar la aplicación de Telegram
-    loop = asyncio.get_event_loop()
-    app_telegram = loop.run_until_complete(setup_application())
-    
-    # Configurar el webhook
-    loop.run_until_complete(set_webhook())
     
     # Obtener el puerto de la variable de entorno o usar 8000 por defecto
     port = int(os.getenv('PORT', 8000))
