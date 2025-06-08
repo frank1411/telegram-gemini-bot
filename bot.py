@@ -315,9 +315,17 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     global application
-    if application is None:
-        application = await setup_application()
-        await set_webhook()
+    logging.info("Iniciando aplicación FastAPI...")
+    try:
+        if application is None:
+            logging.info("Configurando aplicación de Telegram...")
+            application = await setup_application()
+            logging.info("Aplicación de Telegram configurada")
+            await set_webhook()
+            logging.info("Webhook configurado exitosamente")
+    except Exception as e:
+        logging.error(f"Error en startup_event: {str(e)}", exc_info=True)
+        raise
 
 # Endpoint de health check para Render
 @app.get("/")
@@ -327,13 +335,26 @@ async def health_check():
 # Endpoint para recibir actualizaciones de webhook
 @app.post("/webhook")
 async def webhook(request: Request):
-    if application is None:
-        return {"status": "error", "message": "Application not initialized"}
-    
-    json_data = await request.json()
-    update = Update.de_json(json_data, application.bot)
-    await application.process_update(update)
-    return {"status": "ok"}
+    try:
+        logging.info("Recibida petición en webhook")
+        if application is None:
+            logging.error("La aplicación no está inicializada")
+            return {"status": "error", "message": "Application not initialized"}
+        
+        json_data = await request.json()
+        logging.info(f"Datos recibidos: {json_data}")
+        
+        update = Update.de_json(json_data, application.bot)
+        logging.info(f"Update procesado: {update}")
+        
+        await application.initialize()
+        await application.start()
+        await application.process_update(update)
+        
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Error en webhook: {str(e)}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 # Función para configurar la aplicación de Telegram
 async def setup_application():
